@@ -1,0 +1,26 @@
+[package]
+name = "steam_trading_notice"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+config = "0.15.19"
+reqwest = "0.13.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.148"
+tokio = { version = "1.49.0", features = ["full"] }
+tokio-cron-scheduler = "0.15.1"
+tracing = "0.1.44"
+tracing-appender = "0.2.4"
+tracing-subscriber = "0.3.22"
+zip = "7.0.0"
+
+[dependencies.lettre]
+version = "0.11.19"
+default-features = false
+features = [
+    "builder",
+    "smtp-transport",
+    "tokio1-rustls-tls",
+    "tracing"
+]
