@@ -1,11 +1,11 @@
+use crate::config::{CONFIG, MailConfig};
 use crate::init::TlsMode::{STARTTLS, TLS};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::{SUBMISSION_PORT, SUBMISSIONS_PORT};
 use lettre::{AsyncSmtpTransport, Tokio1Executor};
 use std::time::Duration;
-use tracing::{info, instrument, warn};
+use tracing::{info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
 
 pub fn log_init() -> Result<Vec<WorkerGuard>, Box<dyn std::error::Error>> {
@@ -40,9 +40,11 @@ pub fn log_init() -> Result<Vec<WorkerGuard>, Box<dyn std::error::Error>> {
     let subscriber = tracing_subscriber::registry()
         .with(console_layer)
         .with(file_layer)
-        .with(LevelFilter::INFO);
+        .with(CONFIG.log.max_level);
 
     tracing::subscriber::set_global_default(subscriber)?;
+
+    info!("日志系统初始化完成，max_level={}", CONFIG.log.max_level);
 
     // 所有的 WorkerGuard 都必须返回到 main 函数，妥善保管直至程序结束
     Ok(vec![console_guard, file_guard])
@@ -54,14 +56,15 @@ enum TlsMode {
     STARTTLS,
 }
 
-#[instrument(skip(smtp_password))]
-pub async fn smtp_init(
-    smtp_host: &str,
-    smtp_port: u16,
-    smtp_username: &str,
-    smtp_password: &str,
-    smtp_timeout: u64,
-) -> Result<AsyncSmtpTransport<Tokio1Executor>, Box<dyn std::error::Error>> {
+pub async fn smtp_init() -> Result<AsyncSmtpTransport<Tokio1Executor>, Box<dyn std::error::Error>> {
+    let MailConfig {
+        smtp_host,
+        smtp_port,
+        smtp_username,
+        smtp_password,
+        smtp_timeout,
+    } = &CONFIG.mail;
+
     if smtp_host.len() == 0 || smtp_username.len() == 0 || smtp_password.len() == 0 {
         let err = format!(
             "smtp 参数异常，主机名、用户名、密码必须全部具备，host={}，username={}，password.len={}",
@@ -73,7 +76,7 @@ pub async fn smtp_init(
     }
 
     for mode in [TLS, STARTTLS] {
-        let mut smtp_port = smtp_port;
+        let mut smtp_port = *smtp_port;
 
         let mut transport_build = match mode {
             TLS => {
@@ -95,8 +98,8 @@ pub async fn smtp_init(
             smtp_host, smtp_port, mode
         );
 
-        if smtp_timeout > 0 {
-            transport_build = transport_build.timeout(Some(Duration::from_secs(smtp_timeout)));
+        if *smtp_timeout > 0 {
+            transport_build = transport_build.timeout(Some(Duration::from_secs(*smtp_timeout)));
         }
 
         let transport: AsyncSmtpTransport<Tokio1Executor> = transport_build

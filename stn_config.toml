@@ -1,0 +1,6 @@
+[mail]
+smtp_host = "localhost"
+smtp_port = 2525
+smtp_username = "demo"
+smtp_password = "test123"
+smtp_timeout = 10
