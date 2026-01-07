@@ -1,10 +1,12 @@
 use tracing::error;
 
 mod config;
-mod init;
+mod err_type;
+mod log;
+mod mail;
 
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    init::smtp_init().await?;
+async fn run() -> err_type::Result<()> {
+    mail::smtp_init().await?;
 
     // 优雅退出
     tokio::signal::ctrl_c().await?;
@@ -13,7 +15,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::main]
-pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn main() -> err_type::Result<()> {
     // 开发环境下引入 dotenv 读取 .env 文件，方便修改环境变量
     #[cfg(debug_assertions)]
     {
@@ -22,7 +24,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 初始化日志
-    let _guards = init::log_init().expect("日志系统初始化失败");
+    let _guards = log::log_init().expect("日志系统初始化失败");
 
     // 全局错误日志记录
     if let Err(err) = run().await {
