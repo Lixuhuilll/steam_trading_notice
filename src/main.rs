@@ -1,12 +1,15 @@
+use crate::mail::smtp_send_test;
 use tracing::error;
 
 mod config;
 mod err_type;
 mod log;
 mod mail;
+mod scheduler;
 
 async fn run() -> err_type::Result<()> {
-    mail::smtp_init().await?;
+    let mailer = mail::smtp_init().await?;
+    smtp_send_test(&mailer).await;
 
     // 优雅退出
     tokio::signal::ctrl_c().await?;

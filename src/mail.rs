@@ -1,11 +1,13 @@
 use crate::config::{CONFIG, MailConfig};
 use crate::err_type;
 use crate::mail::TlsMode::{STARTTLS, TLS};
+use lettre::message::Mailbox;
+use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::{SUBMISSION_PORT, SUBMISSIONS_PORT};
-use lettre::{AsyncSmtpTransport, Tokio1Executor};
+use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 #[derive(Debug)]
 pub enum TlsMode {
@@ -20,6 +22,7 @@ pub async fn smtp_init() -> err_type::Result<AsyncSmtpTransport<Tokio1Executor>>
         smtp_username,
         smtp_password,
         smtp_timeout,
+        ..
     } = &CONFIG.mail;
 
     if smtp_host.len() == 0 || smtp_username.len() == 0 || smtp_password.len() == 0 {
@@ -88,4 +91,59 @@ pub async fn smtp_init() -> err_type::Result<AsyncSmtpTransport<Tokio1Executor>>
     }
 
     Err("SMTP 服务器连接失败".into())
+}
+
+pub async fn smtp_send_test(mailer: &AsyncSmtpTransport<Tokio1Executor>) {
+    let from = &CONFIG.mail.smtp_username;
+    let send_to = &CONFIG.mail.smtp_send_to;
+
+    let from: Mailbox = match from.parse() {
+        Ok(from) => from,
+        Err(err) => {
+            error!(from = %from, err = %err, "无法解析发件人");
+            return;
+        }
+    };
+
+    let mut email = Message::builder().from(from);
+
+    for send_to in send_to.iter() {
+        let to: Mailbox = match send_to.parse() {
+            Ok(send_to) => send_to,
+            Err(err) => {
+                error!(send_to = %send_to, err = %err, "无法解析收件人");
+                continue;
+            }
+        };
+
+        email = email.to(to);
+    }
+
+    let email = match email
+        .subject("STN 邮件通知功能测试")
+        .header(ContentType::TEXT_PLAIN)
+        .body("本邮件用于测试您是否能收到 STN 的邮件通知，避免遗失消息".to_owned())
+    {
+        Ok(email) => email,
+        Err(err) => {
+            error!(err = %err, "无法构建邮件");
+            return;
+        }
+    };
+
+    info!("本次发送的目标收件人地址为：{:#?}", email.envelope().to());
+
+    match mailer.send(email).await {
+        Ok(res) => {
+            info!(
+                "邮件服务器回应 code={} {}",
+                res.code(),
+                res.first_line().unwrap_or("None")
+            );
+        }
+        Err(err) => {
+            error!(err = %err, "邮件发送失败");
+            return;
+        }
+    };
 }

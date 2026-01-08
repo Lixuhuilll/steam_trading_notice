@@ -9,7 +9,13 @@ const CONFIG_ENV_PREFIX: &str = "STN_CONFIG";
 pub static CONFIG: LazyLock<AppConfig> = LazyLock::new(|| {
     Config::builder()
         .add_source(File::with_name(CONFIG_FILE_NAME).required(false))
-        .add_source(Environment::with_prefix(CONFIG_ENV_PREFIX).separator("__"))
+        .add_source(
+            Environment::with_prefix(CONFIG_ENV_PREFIX)
+                .separator("__")
+                .try_parsing(true)
+                .list_separator(",")
+                .with_list_parse_key("mail.smtp_send_to"),
+        )
         .build()
         .expect("构建配置错误")
         .try_deserialize()
@@ -20,6 +26,7 @@ pub static CONFIG: LazyLock<AppConfig> = LazyLock::new(|| {
 #[serde(default)]
 pub struct AppConfig {
     pub mail: MailConfig,
+    pub scheduler: SchedulerConfig,
     pub log: LogConfig,
 }
 
@@ -31,6 +38,14 @@ pub struct MailConfig {
     pub smtp_username: String,
     pub smtp_password: String,
     pub smtp_timeout: u64,
+    pub smtp_send_to: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct SchedulerConfig {
+    pub cron: String,
+    pub timezone: String,
 }
 
 #[derive(Debug, Deserialize)]
