@@ -1,0 +1,2 @@
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe" # 默认的 link.exe 无法在 dev 环境下构建，因为 PDB 文件体积过大
