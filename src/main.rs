@@ -1,4 +1,5 @@
 use crate::mail::smtp_send_test;
+use lettre::AsyncTransport;
 use tracing::error;
 
 mod config;
@@ -13,6 +14,7 @@ async fn run() -> err_type::Result<()> {
 
     // 优雅退出
     tokio::signal::ctrl_c().await?;
+    mailer.shutdown().await;
 
     Ok(())
 }

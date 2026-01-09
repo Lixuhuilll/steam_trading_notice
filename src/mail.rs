@@ -1,13 +1,15 @@
 use crate::config::{CONFIG, MailConfig};
 use crate::err_type;
 use crate::mail::TlsMode::{STARTTLS, TLS};
-use lettre::message::Mailbox;
 use lettre::message::header::ContentType;
+use lettre::message::{Mailbox, MessageBuilder};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::{SUBMISSION_PORT, SUBMISSIONS_PORT};
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use std::time::Duration;
 use tracing::{error, info, warn};
+
+pub type BuildEMailFn = fn(MessageBuilder) -> err_type::Result<Message>;
 
 #[derive(Debug)]
 pub enum TlsMode {
@@ -97,15 +99,30 @@ pub async fn smtp_send_test(mailer: &AsyncSmtpTransport<Tokio1Executor>) {
     let from = &CONFIG.mail.smtp_username;
     let send_to = &CONFIG.mail.smtp_send_to;
 
+    smtp_send(mailer, from, send_to, |email_builder| {
+        Ok(email_builder
+            .subject("STN 邮件通知功能测试")
+            .header(ContentType::TEXT_PLAIN)
+            .body("本邮件用于测试您是否能收到 STN 的邮件通知，避免遗失消息".to_owned())?)
+    })
+    .await;
+}
+
+async fn smtp_send(
+    mailer: &AsyncSmtpTransport<Tokio1Executor>,
+    from: &String,
+    send_to: &Vec<String>,
+    build_email_fn: BuildEMailFn,
+) -> bool {
     let from: Mailbox = match from.parse() {
         Ok(from) => from,
         Err(err) => {
             error!(from = %from, err = %err, "无法解析发件人");
-            return;
+            return true;
         }
     };
 
-    let mut email = Message::builder().from(from);
+    let mut email_builder = Message::builder().from(from);
 
     for send_to in send_to.iter() {
         let to: Mailbox = match send_to.parse() {
@@ -116,18 +133,14 @@ pub async fn smtp_send_test(mailer: &AsyncSmtpTransport<Tokio1Executor>) {
             }
         };
 
-        email = email.to(to);
+        email_builder = email_builder.bcc(to);
     }
 
-    let email = match email
-        .subject("STN 邮件通知功能测试")
-        .header(ContentType::TEXT_PLAIN)
-        .body("本邮件用于测试您是否能收到 STN 的邮件通知，避免遗失消息".to_owned())
-    {
+    let email = match build_email_fn(email_builder) {
         Ok(email) => email,
         Err(err) => {
             error!(err = %err, "无法构建邮件");
-            return;
+            return true;
         }
     };
 
@@ -143,7 +156,9 @@ pub async fn smtp_send_test(mailer: &AsyncSmtpTransport<Tokio1Executor>) {
         }
         Err(err) => {
             error!(err = %err, "邮件发送失败");
-            return;
+            return true;
         }
     };
+
+    false
 }
