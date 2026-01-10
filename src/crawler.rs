@@ -1,15 +1,16 @@
 use crate::err_type;
-use crate::file::create_temp_file;
 use reqwest;
-use reqwest::Response;
 use serde::Deserialize;
+use std::io::Read;
 use std::sync::OnceLock;
-use tokio::fs::File;
+use tokio::task;
 use tokio_stream::StreamExt;
-use tokio_util::bytes::Bytes;
-use tokio_util::io::StreamReader;
 use tracing::info;
+use zip::ZipArchive;
+use zip::result::ZipError;
 
+const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
+const MAX_UNCOMPRESSED_SIZE: u64 = 30 * 1024 * 1024; // 30 MB
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 #[derive(Debug, Default, Deserialize)]
@@ -52,7 +53,7 @@ pub async fn get_latest_file_name() -> err_type::Result<String> {
     }
 }
 
-pub async fn get_latest_file_zip() -> err_type::Result<File> {
+pub async fn get_latest_data() -> err_type::Result<String> {
     let url = format!(
         "https://api.iflow.work/export/download?dir_name=priority_archive&file_name={}",
         get_latest_file_name().await?
@@ -63,24 +64,57 @@ pub async fn get_latest_file_zip() -> err_type::Result<File> {
     // 检查请求是否成功
     let resp = resp.error_for_status()?;
 
-    // 写入临时文件
-    let mut temp_file = create_temp_file().await?;
-    resp_save_to(resp, &mut temp_file).await?;
+    // 获取原始字节数据
+    let bytes = limited_bytes(resp, MAX_RESPONSE_SIZE).await?;
 
-    Ok(temp_file)
+    // 构建并解压 ZIP 文件（文件正常不超过 10 MB，没必要搞那么复杂）
+    let data = task::spawn_blocking(move || {
+        let cursor = std::io::Cursor::new(bytes);
+        let mut zip = ZipArchive::new(cursor)?;
+
+        if zip.is_empty() {
+            return Err(ZipError::InvalidArchive(
+                "获取数据失败，空的 ZIP 文件".into(),
+            ));
+        }
+
+        let mut file = zip.by_index(0)?;
+        if file.size() > MAX_UNCOMPRESSED_SIZE {
+            return Err(ZipError::InvalidArchive("文件解压后过大".into()));
+        }
+
+        // 预分配容量
+        let mut data = String::with_capacity(file.size() as usize);
+        file.read_to_string(&mut data)?;
+
+        Ok(data)
+    })
+    .await??;
+
+    Ok(data)
 }
 
-async fn resp_save_to(resp: Response, file: &mut File) -> err_type::Result<()> {
-    // 获取响应流
-    let stream = resp.bytes_stream();
-    // 使用 StreamExt 将 error 映射到 std::io::error
-    let stream = stream.map(|result: reqwest::Result<Bytes>| {
-        result.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
-    });
-    let mut stream_reader = StreamReader::new(stream);
+async fn limited_bytes(resp: reqwest::Response, limit: usize) -> err_type::Result<Vec<u8>> {
+    let content_length = resp.content_length().unwrap_or(0);
 
-    // 写入文件
-    tokio::io::copy(&mut stream_reader, file).await?;
+    if content_length > limit as u64 {
+        return Err("声明的响应体过大".into());
+    }
 
-    Ok(())
+    let mut body = if content_length > 0 {
+        Vec::with_capacity(content_length as usize)
+    } else {
+        Vec::new()
+    };
+
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk) = stream.try_next().await? {
+        if body.len() + chunk.len() > limit {
+            return Err("实际响应体过大".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    Ok(body)
 }

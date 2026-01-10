@@ -3,6 +3,7 @@ use lettre::AsyncTransport;
 use tracing::error;
 
 mod config;
+mod crawler;
 mod err_type;
 mod log;
 mod mail;
