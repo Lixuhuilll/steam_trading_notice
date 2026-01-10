@@ -6,6 +6,7 @@ use lettre::message::{Mailbox, MessageBuilder};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::{SUBMISSION_PORT, SUBMISSIONS_PORT};
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{error, info, warn};
 
@@ -17,7 +18,9 @@ pub enum TlsMode {
     STARTTLS,
 }
 
-pub async fn smtp_init() -> err_type::Result<AsyncSmtpTransport<Tokio1Executor>> {
+static MAILER: OnceLock<AsyncSmtpTransport<Tokio1Executor>> = OnceLock::new();
+
+pub async fn smtp_init() -> err_type::Result<()> {
     let MailConfig {
         smtp_host,
         smtp_port,
@@ -77,8 +80,8 @@ pub async fn smtp_init() -> err_type::Result<AsyncSmtpTransport<Tokio1Executor>>
                     "成功与 SMTP 服务器（{}:{}）建立 {:?} 加密连接。",
                     smtp_host, smtp_port, mode
                 );
-
-                return Ok(transport);
+                MAILER.set(transport).map_err(|_| "SMTP 客户端已初始化")?;
+                return Ok(());
             }
             Ok(false) => {
                 warn!(
@@ -95,11 +98,15 @@ pub async fn smtp_init() -> err_type::Result<AsyncSmtpTransport<Tokio1Executor>>
     Err("SMTP 服务器连接失败".into())
 }
 
-pub async fn smtp_send_test(mailer: &AsyncSmtpTransport<Tokio1Executor>) {
+pub fn get_mailer() -> &'static AsyncSmtpTransport<Tokio1Executor> {
+    MAILER.get().expect("SMTP 客户端还未初始化")
+}
+
+pub async fn smtp_send_test() {
     let from = &CONFIG.mail.smtp_username;
     let send_to = &CONFIG.mail.smtp_send_to;
 
-    smtp_send(mailer, from, send_to, |email_builder| {
+    smtp_send(get_mailer(), from, send_to, |email_builder| {
         Ok(email_builder
             .subject("STN 邮件通知功能测试")
             .header(ContentType::TEXT_PLAIN)
