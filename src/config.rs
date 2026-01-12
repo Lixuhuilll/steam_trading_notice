@@ -28,6 +28,7 @@ pub struct AppConfig {
     pub mail: MailConfig,
     pub scheduler: SchedulerConfig,
     pub log: LogConfig,
+    pub browserless: BrowserlessConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -46,6 +47,12 @@ pub struct MailConfig {
 pub struct SchedulerConfig {
     pub cron: String,
     pub timezone: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct BrowserlessConfig {
+    pub token: String,
 }
 
 #[derive(Debug, Deserialize)]

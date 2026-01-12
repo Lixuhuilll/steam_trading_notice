@@ -1,16 +1,13 @@
+use crate::config::CONFIG;
 use crate::err_type;
 use reqwest;
 use serde::Deserialize;
-use std::io::Read;
+use serde_json::json;
 use std::sync::OnceLock;
-use tokio::task;
 use tokio_stream::StreamExt;
-use tracing::info;
-use zip::ZipArchive;
-use zip::result::ZipError;
+use tracing::{debug, info, trace};
 
-const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
-const MAX_UNCOMPRESSED_SIZE: u64 = 30 * 1024 * 1024; // 30 MB
+const MAX_RESPONSE_SIZE: usize = 1 * 1024 * 1024; // 1 MB
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 #[derive(Debug, Default, Deserialize)]
@@ -37,71 +34,51 @@ pub fn get_client() -> &'static reqwest::Client {
     CLIENT.get().expect("HTTP 客户端还未初始化")
 }
 
-pub async fn get_latest_file_name() -> err_type::Result<String> {
-    let mut data_dump_list: DataDumpList = get_client()
-        .get("https://api.iflow.work/export/list?dir_name=priority_archive")
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-
-    if data_dump_list.success && !data_dump_list.files.is_empty() {
-        Ok(data_dump_list.files.pop().unwrap())
-    } else {
-        Err("DataDump 文件列表获取失败".into())
-    }
-}
-
-pub async fn get_latest_data() -> err_type::Result<String> {
+pub async fn get_website_jpeg() -> err_type::Result<Vec<u8>> {
     let url = format!(
-        "https://api.iflow.work/export/download?dir_name=priority_archive&file_name={}",
-        get_latest_file_name().await?
+        "https://production-sfo.browserless.io/chrome/screenshot?token={}",
+        CONFIG.browserless.token
     );
-    info!("GET {}", url);
 
-    let resp = get_client().get(url).send().await?;
+    let json = json!({
+        "waitForSelector": {
+            "hidden": true,
+            "selector": ".ant-spin"
+        },
+        "url": "https://www.iflow.work/?page_num=1&platforms=uuyp-buff-igxe-eco-c5&games=csgo-dota2&sort_by=safe_buy&min_price=1&max_price=5000&min_volume=10000&max_latency=600&price_mode=buy",
+        "options": {
+            "type": "jpeg",
+            "fullPage": true,
+            "encoding": "binary"
+        }
+    });
+
+    // 发起请求
+    let resp = get_client().post(url).json(&json).send().await?;
+
     // 检查请求是否成功
     let resp = resp.error_for_status()?;
 
     // 获取原始字节数据
     let bytes = limited_bytes(resp, MAX_RESPONSE_SIZE).await?;
 
-    // 构建并解压 ZIP 文件（文件正常不超过 10 MB，没必要搞那么复杂）
-    let data = task::spawn_blocking(move || {
-        let cursor = std::io::Cursor::new(bytes);
-        let mut zip = ZipArchive::new(cursor)?;
-
-        if zip.is_empty() {
-            return Err(ZipError::InvalidArchive(
-                "获取数据失败，空的 ZIP 文件".into(),
-            ));
-        }
-
-        let mut file = zip.by_index(0)?;
-        if file.size() > MAX_UNCOMPRESSED_SIZE {
-            return Err(ZipError::InvalidArchive("文件解压后过大".into()));
-        }
-
-        // 预分配容量
-        let mut data = String::with_capacity(file.size() as usize);
-        file.read_to_string(&mut data)?;
-
-        Ok(data)
-    })
-    .await??;
-
-    Ok(data)
+    Ok(bytes)
 }
 
 async fn limited_bytes(resp: reqwest::Response, limit: usize) -> err_type::Result<Vec<u8>> {
     let content_length = resp.content_length().unwrap_or(0);
 
+    debug!("声明的响应体体积为：{} Bytes", content_length);
+
     if content_length > limit as u64 {
-        return Err("声明的响应体过大".into());
+        return Err(format!(
+            "声明的响应体体积为：{} Bytes，声明的响应体过大",
+            content_length
+        )
+        .into());
     }
 
-    let mut body = if content_length > 0 {
+    let mut bytes = if content_length > 0 {
         Vec::with_capacity(content_length as usize)
     } else {
         Vec::new()
@@ -110,11 +87,23 @@ async fn limited_bytes(resp: reqwest::Response, limit: usize) -> err_type::Resul
     let mut stream = resp.bytes_stream();
 
     while let Some(chunk) = stream.try_next().await? {
-        if body.len() + chunk.len() > limit {
-            return Err("实际响应体过大".into());
+        let chunk_length = chunk.len();
+        let total_length = bytes.len() + chunk_length;
+
+        trace!("分块的大小为：{} Bytes", chunk_length);
+
+        if total_length > limit {
+            return Err(format!(
+                "实际的响应体体积达到了：{} Bytes，实际的响应体过大，提前终止传输",
+                total_length
+            )
+            .into());
         }
-        body.extend_from_slice(&chunk);
+
+        bytes.extend_from_slice(&chunk);
     }
 
-    Ok(body)
+    debug!("实际的响应体体积为：{} Bytes", bytes.len());
+
+    Ok(bytes)
 }
