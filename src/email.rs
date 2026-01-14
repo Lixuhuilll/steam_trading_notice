@@ -1,16 +1,14 @@
 use crate::config::{CONFIG, MailConfig};
+use crate::crawler::get_website_jpeg;
+use crate::email::TlsMode::{STARTTLS, TLS};
 use crate::err_type;
-use crate::mail::TlsMode::{STARTTLS, TLS};
-use lettre::message::header::ContentType;
-use lettre::message::{Mailbox, MessageBuilder};
+use lettre::message::{Attachment, Mailbox, MessageBuilder, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::{SUBMISSION_PORT, SUBMISSIONS_PORT};
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{error, info, warn};
-
-pub type BuildEMailFn = fn(MessageBuilder) -> err_type::Result<Message>;
 
 #[derive(Debug)]
 pub enum TlsMode {
@@ -102,24 +100,61 @@ pub fn get_mailer() -> &'static AsyncSmtpTransport<Tokio1Executor> {
     MAILER.get().expect("SMTP 客户端还未初始化")
 }
 
-pub async fn smtp_send_test() {
+pub async fn smtp_send_test() -> bool {
     let from = &CONFIG.mail.smtp_username;
     let send_to = &CONFIG.mail.smtp_send_to;
 
-    smtp_send(get_mailer(), from, send_to, |email_builder| {
-        Ok(email_builder
+    smtp_send(get_mailer(), from, send_to, async |email_builder| {
+        let html = r#"<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STN 邮件通知功能测试</title>
+</head>
+<body>
+    <div style="display: flex; flex-direction: column; align-items: center;">
+        <h1 style="font-family: Arial, Helvetica, sans-serif;">本邮件用于测试您是否能收到 STN 的邮件通知，避免遗失消息</h1>
+        <p>以下是当前的 Steam 挂刀情报：</p>
+        <img src=cid:screenshot alt="Steam 挂刀情报站的截图，如未显示图像请检查邮箱的相关设置">
+    </div>
+</body>
+</html>"#;
+
+        let jpeg = get_website_jpeg().await?;
+
+        let email = email_builder
             .subject("STN 邮件通知功能测试")
-            .header(ContentType::TEXT_PLAIN)
-            .body("本邮件用于测试您是否能收到 STN 的邮件通知，避免遗失消息".to_owned())?)
-    })
-    .await;
+            .multipart(
+                // 将纯文本和 HTML 消息合并成一封邮件
+                MultiPart::alternative()
+                    // 纯文本用于在 HTML 无法显示时展示回退信息
+                    .singlepart(
+                        SinglePart::plain("您的邮箱无法显示 HTML 邮件，请检查安全设置或者更换更加现代化的邮箱系统".to_owned())
+                    )
+                    // 主要内容由 HTML 展示
+                    .multipart(
+                        // 将图片和 HTML 混合起来
+                        MultiPart::related()
+                            .singlepart(
+                                SinglePart::html(html.to_owned())
+                            )
+                            .singlepart(
+                                Attachment::new_inline("screenshot".to_owned())
+                                    .body(jpeg, "image/jpeg".parse()?)
+                            )
+                    ),
+            )?;
+
+        Ok(email)
+    }).await
 }
 
 async fn smtp_send(
     mailer: &AsyncSmtpTransport<Tokio1Executor>,
     from: &String,
     send_to: &Vec<String>,
-    build_email_fn: BuildEMailFn,
+    build_email: impl AsyncFnOnce(MessageBuilder) -> err_type::Result<Message>,
 ) -> bool {
     let from: Mailbox = match from.parse() {
         Ok(from) => from,
@@ -143,7 +178,7 @@ async fn smtp_send(
         email_builder = email_builder.bcc(to);
     }
 
-    let email = match build_email_fn(email_builder) {
+    let email = match build_email(email_builder).await {
         Ok(email) => email,
         Err(err) => {
             error!(err = %err, "无法构建邮件");

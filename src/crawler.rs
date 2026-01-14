@@ -1,20 +1,13 @@
 use crate::config::CONFIG;
 use crate::err_type;
 use reqwest;
-use serde::Deserialize;
 use serde_json::json;
 use std::sync::OnceLock;
 use tokio_stream::StreamExt;
-use tracing::{debug, info, trace};
+use tracing::{debug, trace};
 
 const MAX_RESPONSE_SIZE: usize = 1 * 1024 * 1024; // 1 MB
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
-#[derive(Debug, Default, Deserialize)]
-pub struct DataDumpList {
-    pub files: Vec<String>,
-    pub success: bool,
-}
 
 // http client 初始化函数：只能调用一次，后续调用会被忽略
 pub fn client_init() -> err_type::Result<()> {

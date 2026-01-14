@@ -1,30 +1,29 @@
-use crate::crawler::{client_init, get_website_jpeg};
-use crate::mail::{get_mailer, smtp_send_test};
 use lettre::AsyncTransport;
 use tracing::{error, warn};
 
 mod config;
 mod crawler;
+mod email;
 mod err_type;
 mod log;
-mod mail;
 mod scheduler;
 
 async fn run() -> err_type::Result<()> {
     // 初始化 SMTP 客户端，首次失败尝试重试
-    if let Err(_) = mail::smtp_init().await {
+    if let Err(_) = email::smtp_init().await {
         warn!("SMTP 客户端初始化失败，尝试重试一次");
-        mail::smtp_init().await?;
+        email::smtp_init().await?;
     }
-    smtp_send_test().await;
 
     // 初始化 http client
-    client_init()?;
-    get_website_jpeg().await?;
+    crawler::client_init()?;
+
+    // 测试邮件功能
+    email::smtp_send_test().await;
 
     // 优雅退出
     tokio::signal::ctrl_c().await?;
-    get_mailer().shutdown().await;
+    email::get_mailer().shutdown().await;
 
     Ok(())
 }
